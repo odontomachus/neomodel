@@ -152,6 +152,51 @@ class RelationshipManager(object):
         return rel_instance
 
     @check_origin
+    def batch_connect(self, objs, properties=None):
+        if not self.definition['model'] and properties:
+            raise NotImplementedError("Relationship properties without " +
+                    "using a relationship model is no longer supported")
+
+        for obj in objs:
+            self._check_node(obj)
+
+        new_rel = rel_helper(lhs='us', rhs='them', ident='r', **self.definition)
+        q = "START them=node({them}), us=node({self}) CREATE UNIQUE" + new_rel
+        params = {'them': [obj._id for obj in objs]}
+
+        if not properties and not self.definition['model']:
+            self.origin.cypher(q, params)
+            return True
+
+
+        rel_model = self.definition['model']
+        # need to generate defaults etc to create fake instance
+        tmp = rel_model(**properties) if properties else rel_model()
+
+        for p, v in rel_model.deflate(tmp.__properties__).items():
+            params['place_holder_' + p] = v
+            q += " SET r." + p + " = {place_holder_" + p + "}"
+
+        rels_ = self.origin.cypher(q + " RETURN r", params)[0][0]
+        rel_instances = []
+        for rel_ in rels_:
+            rel_instance = rel_model.inflate(rel_)
+            rel_instances.append(rel_instance)
+
+            if self.definition['direction'] == INCOMING:
+                rel_instance._start_node_class = obj.__class__
+                rel_instance._end_node_class = self.origin.__class__
+            else:
+                rel_instance._start_node_class = self.origin.__class__
+                rel_instance._end_node_class = obj.__class__
+
+        self.origin.cypher(q, params)
+        return rel_instances
+
+
+
+
+    @check_origin
     def relationship(self, obj):
         """relationship: node"""
         self._check_node(obj)
